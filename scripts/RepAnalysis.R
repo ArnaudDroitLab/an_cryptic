@@ -11,11 +11,13 @@ grep.col <- function(df, regex) {
 }
 
 # Get output directory, which in our case is also the input directory.
-output.dir <- file.path("output-new")
+base.output.dir <- file.path("output-new")
+output.dir = file.path(base.output.dir, "analysis")
+dir.create(output.dir, recursive=TRUE, showWarnings=FALSE)
 
 
 # Read in result files.
-count.path = file.path(output.dir, "5-3Counts")
+count.path = file.path(base.output.dir, "5-3Counts")
 count.files = list.files(count.path, "*.results")
 all.counts = read.identical(file.path(count.path, count.files), 1:5, 6:11, gsub(".results", "", count.files), quote="")
 
@@ -26,18 +28,41 @@ sense.5 = grep.col(all.counts, "Sense.5")
 sense.3 = grep.col(all.counts, "Sense.3")
 
 # Calculate new columns
+calculate.enrichment <- function(input.df, old.suffix, new.suffix) {
+    result = cbind(grep.col(input.df, "CK2") - grep.col(input.df, "WT"),
+                   grep.col(input.df, "Spt6") - grep.col(input.df, "WT"))
+    colnames(result) = gsub(old.suffix, new.suffix, colnames(result))
 
+    return(result)
+}
+
+calculate.ratio <- function(col1, col2, new.suffix) {
+    result = log2(grep.col(all.counts, col1) / grep.col(all.counts, col2))
+    colnames(result) = gsub(col1, new.suffix, colnames(result))
+    return(result)    
+}
+
+# Calculate antisense ratio
+antisense.ratio = calculate.ratio("Antisense.All", "Sense.All", "Antisense.Ratio")
+antisense.enrichment = calculate.enrichment(antisense.ratio, "Antisense.Ratio", "Antisense.Enrichment")
+
+# Calculate sense 3'/5' ratio for all libraries.
+three.on.five.ratio = calculate.ratio("Sense.3.", "Sense.5.", "Three.On.Five.Ratio")
+three.on.five.enrichment = calculate.enrichment(three.on.five.ratio, "Three.On.Five.Ratio", "Three.On.Five.Enrichment")
+
+#all.counts = cbind(all.counts, antisense.ratio, antisense.enrichment, three.on.five.ratio, three.on.five.enrichment)   
+all.counts = cbind(all.counts, 
+                   antisense.ratio,
+                   antisense.enrichment,
+                   three.on.five.ratio,
+                   three.on.five.enrichment)
 
 
 # Perform gene filtering:
 # Subset on minimum number of reads so we don't deal with widly fluctuating ratios.
-sense.all = grep.col(all.counts, "Sense.All")
 min.sense.overall = apply(sense.all, 1, mean) > 100 & apply(sense.all > 50, 1, all)
-antisense.all = grep.col(all.counts, "Antisense.All")
 min.antisense.overall = apply(antisense.all > 1, 1, all)
-sense.5 = grep.col(all.counts, "Sense.5")
 min.sense.5 = apply(sense.5 >= 20, 1, all)
-sense.3 = grep.col(all.counts, "Sense.3")
 min.sense.3 = apply(sense.3 >= 10, 1, all)
 
 # Remove genes overlapping another gene in the opposite sense.
@@ -53,80 +78,49 @@ keep = min.sense.overall & min.antisense.overall & min.sense.5 & min.sense.3 & s
 all.counts = all.counts[keep, ]
 
 # Add symbols to genes
-allGeneNames <- as.data.frame(org.Sc.sgdGENENAME)
-all.counts$Symbol <- allGeneNames$gene_name[match(all.counts$Gene, all.counts$systematic_name)]                             
-
-                             
-# Calculate antisense percentage
-antisense.percentage = grep.col(all.counts, "Antisense.All")  / (grep.col(all.counts, "Sense.All") + grep.col(all.counts, "Antisense.All"))
-colnames(antisense.percentage) = gsub("Antisense.All", "Antisense.Percentage", colnames(antisense.percentage))
-
-# Calculate antisense percentage
-antisense.ratio = log2(grep.col(all.counts, "Antisense.All")  / grep.col(all.counts, "Sense.All"))
-colnames(antisense.ratio) = gsub("Antisense.All", "Antisense.Ratio", colnames(antisense.ratio))
-
-
-# Calculate antisense enrichment
-antisense.enrichment = cbind(log2(grep.col(antisense.percentage, "CK2") / grep.col(antisense.percentage, "WT")),
-                             log2(grep.col(antisense.percentage, "Spt6") / grep.col(antisense.percentage, "WT")))
-colnames(antisense.enrichment) = gsub("Antisense.Percentage", "Antisense.enrichment", colnames(antisense.enrichment))
-
-# Calculate sense 3'/5' ratio for all libraries.
-three.on.five = grep.col(all.counts, "Sense.3") / grep.col(all.counts, "Sense.5")
-colnames(three.on.five) = gsub("Sense.3", "Three.On.Five", colnames(three.on.five))
-
-three.on.five.ratio = log2(grep.col(all.counts, "Sense.3") / grep.col(all.counts, "Sense.5"))
-colnames(three.on.five) = gsub("Sense.3", "Three.On.Five", colnames(three.on.five))
-
-
-three.on.five.enrichment = cbind(log2(grep.col(three.on.five, "CK2") / grep.col(three.on.five, "WT")),
-                                 log2(grep.col(three.on.five, "Spt6") / grep.col(three.on.five, "WT")))
-colnames(three.on.five.enrichment) = gsub("Three.On.Five", "Three.On.Five.enrichment", colnames(three.on.five.enrichment))        
-        
+all.counts$Symbol <- mapIds(org.Sc.sgd.db, all.counts$Gene, "GENENAME", "ENSEMBL", "first")
         
 row.t.test <- function(x) {
     CK2 = t.test(x[grepl("CK2", names(x))], x[grepl("WT", names(x))])$p.value
     Spt6 = t.test(x[grepl("Spt6", names(x))], x[grepl("WT", names(x))])$p.value
     return(c(CK2=CK2, Spt6=Spt6))
 }        
+
+all.t.test <- function(input.df, colname) {
+    results = t(apply(input.df, 1, row.t.test))
+    colnames(results) <- paste(colnames(results), colname, "Pval", sep=".")
+    return(results)
+}
         
 # T-tests
-antisense.enrichment.pval = t(apply(antisense.percentage, 1, row.t.test))
-antisense.ratio.pval = t(apply(antisense.ratio, 1, row.t.test))
-three.on.five.enrichment.pval = t(apply(three.on.five, 1, row.t.test))
-three.on.five.ratio.pval = t(apply(three.on.five.ratio, 1, row.t.test))        
+# antisense.enrichment.pval = t(apply(antisense.percentage, 1, row.t.test))
+# antisense.ratio.pval = t(apply(antisense.ratio, 1, row.t.test))
+# three.on.five.enrichment.pval = t(apply(three.on.five, 1, row.t.test))
+# three.on.five.ratio.pval = t(apply(three.on.five.ratio, 1, row.t.test))        
 
+all.counts = cbind(all.counts,
+                   all.t.test(antisense.ratio[keep, ], "Antisense.Ratio"),
+                   all.t.test(three.on.five.ratio[keep, ], "Three.On.Five.Ratio"))
 
-test = cbind(all.counts, 
-             antisense.percentage, 
-             antisense.ratio, 
-             antisense.enrichment, 
-             three.on.five.ratio, 
-             three.on.five.enrichment, 
-             antisense.enrichment.pval, 
-             antisense.ratio.pval, 
-             three.on.five.enrichment.pval, three.on.five.ratio.pval)
-
-
-antisense.ratio.df = melt(antisense.ratio)
-antisense.ratio.df$Mutant = gsub("(-2)*.Antisense.Ratio", "", antisense.ratio.df$variable)
-antisense.ratio.df$Rep = ifelse(grepl("-2", antisense.ratio.df$variable), 2, 1)
-means.df = ddply(antisense.ratio.df, Mutant~Rep, summarize, mean=mean(value))
-
-ggplot(antisense.ratio.df) + 
-    geom_density(mapping=aes(x=value, fill=Mutant), alpha=0.6) + 
-    geom_vline(data=means.df, mapping=aes(xintercept=mean), linetype=2) + 
-    xlab("log2(Antisense reads / Sense reads)") + 
-    facet_grid(Mutant~Rep)
+write.table(all.counts, file=file.path(output.dir, "Genewise data.txt"), sep="\t", col.names=TRUE, row.names=FALSE)                   
+                   
+plot.raw.ratios <- function(input.df, colname, x.label, file.label) {
+    melt.df = melt(input.df)
+    melt.df$Mutant = gsub(paste0("(-2)*.", colname), "", melt.df$variable)
+    melt.df$Rep = ifelse(grepl("-2", melt.df$variable), 2, 1)
+    means.df = ddply(melt.df, Mutant~Rep, summarize, mean=mean(value, na.rm=TRUE))
     
-ggsave("output/Antisense ratios.pdf")    
+    ggplot(melt.df) + 
+        geom_density(mapping=aes(x=value, fill=Mutant), alpha=0.6) + 
+        geom_vline(data=means.df, mapping=aes(xintercept=mean), linetype=2) + 
+        xlab(x.label) + 
+        facet_grid(Mutant~Rep)
+        
+    ggsave(file.path(output.dir, paste0(file.label, ".pdf")))
+}
 
-# Replicate correlation
-rep.correlation = rbind(setNames(grep.col(antisense.ratio, "CK2"), c("Rep1","Rep2")),
-                        setNames(grep.col(antisense.ratio, "Spt6"), c("Rep1","Rep2")),
-                        setNames(grep.col(antisense.ratio, "WT"), c("Rep1","Rep2")))
-rep.correlation$Mutant = rep(c("CK2", "Spt6", "WT"), each=nrow(antisense.ratio))
-rep.correlation.melt = melt(rep.correlation, "Mutant", variable.name = "Replicate")
+plot.raw.ratios(antisense.ratio[keep,], "Antisense.Ratio", "log2(Antisense reads / Sense reads)", "Antisense ratios")
+plot.raw.ratios(three.on.five.ratio[keep,], "Three.On.Five.Ratio", "log2(3' reads / 5' reads)", "Three prime to five prime ratios")
 
 pairwise.correlations <- function(input.df, colname, label) {
     # Plot antisense ratios correlations
@@ -164,11 +158,11 @@ pairwise.correlations <- function(input.df, colname, label) {
         geom_label(data=cor.df, mapping=aes(label=sprintf("R=%.2f", Cor), x=x, y=y), hjust=1, vjust=1) +    
         facet_grid(Mutant1~Mutant2)
     
-    ggsave(paste0("output/Pairwise correlations of ", label, ".pdf"))    
+    ggsave(file.path(output.dir, paste0("Pairwise correlations of ", label, ".pdf")))    
 }
 
-pairwise.correlations(antisense.ratio, ".Antisense.Ratio", "antisense ratios")
-pairwise.correlations(three.on.five.ratio, ".Sense.3.", "three prime to Five prime ratios")
+pairwise.correlations(antisense.ratio[keep,], ".Antisense.Ratio", "antisense ratios")
+pairwise.correlations(three.on.five.ratio[keep,], ".Three.On.Five.Ratio", "three prime to five prime ratios")
 
 wt.enrichment <- function(input.df, colname, label, ymax) {
     # Plot antisense enrichments distributions
@@ -178,8 +172,8 @@ wt.enrichment <- function(input.df, colname, label, ymax) {
     for(i in c("CK2", "Spt6-SA")) {
         for(j in 1:2) {
             rep.str = ifelse(j==2, "-2", "")
-            mutant <- antisense.ratio[,paste0(i, rep.str, ".Antisense.Ratio")]
-            wt <- antisense.ratio[,paste0("WT", rep.str, ".Antisense.Ratio")]
+            mutant <- input.df[,paste0(i, rep.str, colname)]
+            wt <- input.df[,paste0("WT", rep.str, colname)]
             enrichment = mutant - wt
             
             stat.test = t.test(enrichment)
@@ -215,87 +209,44 @@ wt.enrichment <- function(input.df, colname, label, ymax) {
         geom_label(data=conf.df, mapping=aes(x=x, y=y, label=p), hjust=1, vjust=1) +
         facet_grid(Rep~Mutant)
     
-    ggsave("output/Enrichment of .pdf")   
+    ggsave(file.path(output.dir, paste0("Enrichment of ", label, ".pdf")))
     
 }
 
-wt.enrichment(antisense.ratio, ".Antisense.Ratio", "antisense ratios", 0.4)
-wt.enrichment(three.on.five.ratio, ".Sense.3.", "three prime to Five prime ratios", 1.4)
+wt.enrichment(antisense.ratio[keep,], ".Antisense.Ratio", "antisense ratios", 0.4)
+wt.enrichment(three.on.five.ratio[keep,], ".Three.On.Five.Ratio", "three prime to Five prime ratios", 1.4)
+
+stats.df = NULL
+for(metric in c("Antisense.Enrichment", "Three.On.Five.Enrichment")) {
+    for(mutant in c("CK2", "Spt6-SA")) {
+        for(replicate.id in c(1, 2)) {
+            stats = t.test(all.counts[, paste0(mutant, ifelse(replicate.id==2, "-2", ""), ".", metric)])
+            new.stats = data.frame(Metric=metric,
+                                  Mutant=mutant,
+                                  Replicate=replicate.id,
+                                  Mean=stats$estimate,
+                                  CI.low=stats$conf.int[1],
+                                  CI.high=stats$conf.int[2],
+                                  Mean.Absolute=2^stats$estimate,
+                                  CI.low.Absolute=2^stats$conf.int[1],
+                                  CI.high.Absolute=2^stats$conf.int[2],
+                                  stringsAsFactors=FALSE)
+                                  
+            if(is.null(stats.df)) {
+                stats.df = new.stats
+            } else {
+                stats.df = rbind(stats.df, new.stats)
+            }
+        }
+    }
+}
+write.table(stats.df, file=file.path(output.dir, "Statistics.txt"), row.names=FALSE, col.names=TRUE, sep="\t")
 
 
-# Rank various metrics.
-concatResults$CK2.Antisense.rank <- order(concatResults$CK2.Antisense.enrichment, decreasing=TRUE)
-concatResults$CK2.Antisense.ecdf <-  ecdf(concatResults$CK2.Antisense.enrichment)(concatResults$CK2.Antisense.enrichment)
-concatResults$Spt6.Antisense.rank <- order(concatResults$Spt6.Antisense.enrichment, decreasing=TRUE)
-concatResults$Spt6.Antisense.ecdf <-  ecdf(concatResults$Spt6.Antisense.enrichment)(concatResults$Spt6.Antisense.enrichment)
-
-concatResults$CK2.3Enrichment.rank <- order(concatResults$CK2.WT.3.on.5, decreasing=TRUE)
-concatResults$CK2.3Enrichment.ecdf <- ecdf(concatResults$CK2.3Enrichment.rank)(concatResults$CK2.3Enrichment.rank)
-concatResults$Spt6.3Enrichment.rank <- order(concatResults$Spt6.WT.3.on.5, decreasing=TRUE)
-concatResults$Spt6.3Enrichment.ecdf <- ecdf(concatResults$Spt6.3Enrichment.rank)(concatResults$Spt6.3Enrichment.rank)
-
-# Write the table to disk.
-write.table(concatResults, file.path(output.dir, "All Results.txt"), sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE)
-                                    
-# Get antisense confidence interval
-sink(file=file.path(output.dir, "Statistical results.txt"))
-cat("Is CK2 antisense enrichment different from 0?\n")
-no.infinity <- concatResults$CK2.Antisense.enrichment
-no.infinity[is.infinite(no.infinity)] <- NA
-t.test(no.infinity)
-cat("Is Spt6 antisense enrichment different from 0?\n")
-no.infinity <- concatResults$Spt6.Antisense.enrichment
-no.infinity[is.infinite(no.infinity)] <- NA
-t.test(no.infinity)
-sink(NULL)
-
-sink(file=file.path(output.dir, "Statistical results.txt"), append=TRUE)
-cat("Is CK2 3' enrichment different from 0?\n")
-t.test(concatResults$CK2.WT.3.on.5)
-cat("Is Spt6 3' enrichment different from 0?\n")
-t.test(concatResults$Spt6.WT.3.on.5)
-sink(NULL)
-
-gene.length.below.5K <- (concatResults$End - concatResults$Start) < 5000
-
-# Gene length effect
-ggplot(data=concatResults[gene.length.below.5K,], mapping=aes(y=CK2.WT.3.on.5, x=End-Start)) +
-    geom_point() +
-    geom_smooth(method=lm, se=FALSE) +
-    ylab("3' enrichment") + xlab("Gene length")
-ggsave(file.path(output.dir, "Gene length effect on 3 prime enrichment (CK2).pdf"), width=7, height=7)
-    
-ggplot(data=concatResults[gene.length.below.5K,], mapping=aes(y=Spt6.WT.3.on.5, x=End-Start)) +
-    geom_point() +
-    geom_smooth(method=lm, se=FALSE) +
-    ylab("3' enrichment") + xlab("Gene length")
-ggsave(file.path(output.dir, "Gene length effect on 3 prime enrichment (Spt6).pdf"), width=7, height=7)
-
-# Read PolII enrichment data.
-rnap2.enrichment = read.table("input/ck2.wt.rnap2.list.xls", sep="\t", header=TRUE)
-rnap2.enrichment$Symbol = gsub(":.*$", "", rnap2.enrichment$X.1)
-rnap2.enrichment$Gene = gsub("^.*:", "", rnap2.enrichment$X.1)
-
-concatResults$RNAII.enrichment = rnap2.enrichment[match(concatResults$Gene, rnap2.enrichment$Gene), 1]
-
-# Plot PolII enrichment vs antisense anrichment
-ggplot(data=concatResults) + geom_point(mapping=aes(x=RNAII.enrichment, y=CK2.Antisense.enrichment))
-ggsave("PolII vs Antisense enrichment.pdf")
-
-ggplot(data=concatResults) + geom_point(mapping=aes(x=order(RNAII.enrichment), y=order(CK2.Antisense.enrichment)))
-ggsave("PolII vs Antisense enrichment (Rank).pdf")
-
-# Plot PolII enrichment vs 3' anrichment
-ggplot(data=concatResults) + geom_point(mapping=aes(x=RNAII.enrichment, y=CK2.WT.3.on.5))
-ggsave("PolII vs 3 prime enrichment.pdf")
-
-ggplot(data=concatResults) + geom_point(mapping=aes(x=order(RNAII.enrichment), y=order(CK2.WT.3.on.5)))
-ggsave("PolII vs 3 prime enrichment (Rank).pdf")
 
 # Do metagene type plot.
 # Build a data.frame describing the matrix files.
-
-matrix.path = file.path(output.dir, "Metagene")
+matrix.path = file.path(base.output.dir, "Metagene")
 matrix.files = list.files(matrix.path, pattern=".matrix$")
 input.files = data.frame(Filename  = file.path(matrix.path, matrix.files),
                          Name      = gsub(".sorted.matrix", "", matrix.files),
@@ -368,11 +319,6 @@ for(gene in genesOfInterest) {
     finalDF <- melt(log2(final.matrix))
     colnames(finalDF) <- c("Library", "TSS.distance", "RPM")
     
-    # Define strain/direction as factors.
-    #finalDF$Strain = factor(gsub("_.*", "", finalDF$Library), levels=c("WT", "Spt6-SA", "CK2"))
-    #finalDF$Direction = factor(gsub(".*_", "", finalDF$Library), levels=c("sense", "antisense"))
-    #finalDF$Replicate = factor(gsub(".*_", "", finalDF$Library), levels=c("sense", "antisense"))
-    
     finalDF$Strain = input.files$Strain
     finalDF$Direction = input.files$Direction
     finalDF$Replicate = input.files$Replicate
@@ -386,37 +332,4 @@ for(gene in genesOfInterest) {
     # Save it!
     ggsave(file.path(output.dir, paste0("Metagene for ", gene, ".pdf")))
 }
-
-
-# Compute correlation between antisense enrichments.
-no.infinity = subset(concatResults, !is.infinite(CK2.Antisense.enrichment) & !is.nan(CK2.Antisense.enrichment) & !is.infinite(Spt6.Antisense.enrichment) & !is.nan(Spt6.Antisense.enrichment))
-
-cor.results = with(no.infinity, cor.test(CK2.Antisense.enrichment, Spt6.Antisense.enrichment))
-cor.interval = sprintf("R^2 95%% conf. interval: %0.2f-%0.2f", cor.results$conf.int[1], cor.results$conf.int[2])
-
-ggplot(no.infinity, aes(x=CK2.Antisense.enrichment, y=Spt6.Antisense.enrichment)) +
-    geom_point(mapping=) +
-    geom_smooth(method=lm, se=FALSE) +
-    annotate("text", x=max(no.infinity$CK2.Antisense.enrichment), y=max(no.infinity$Spt6.Antisense.enrichment), label=cor.interval, hjust=1, size=5)
-
-ggsave("Antisense enrichment correlation.pdf")    
-
-# Do the same for 3' enrichments.
-no.infinity = subset(concatResults, !is.infinite(CK2.WT.3.on.5) & !is.nan(CK2.WT.3.on.5) & !is.infinite(Spt6.WT.3.on.5) & !is.nan(Spt6.WT.3.on.5))
-
-# Remove outliers
-no.infinity = subset(no.infinity, CK2.WT.3.on.5 < quantile(CK2.WT.3.on.5, 0.995) &
-                                  CK2.WT.3.on.5 > quantile(CK2.WT.3.on.5, 0.005) & 
-                                  Spt6.WT.3.on.5 < quantile(Spt6.WT.3.on.5, 0.995) & 
-                                  Spt6.WT.3.on.5 > quantile(Spt6.WT.3.on.5, 0.005))
-
-cor.results = with(no.infinity, cor.test(CK2.WT.3.on.5, Spt6.WT.3.on.5))
-cor.interval = sprintf("R^2 95%% conf. interval: %0.2f-%0.2f", cor.results$conf.int[1], cor.results$conf.int[2])
-
-ggplot(no.infinity, aes(x=CK2.WT.3.on.5, y=Spt6.WT.3.on.5)) +
-    geom_point(mapping=) +
-    geom_smooth(method=lm, se=FALSE) +
-    annotate("text", x=max(no.infinity$CK2.WT.3.on.5), y=max(no.infinity$Spt6.WT.3.on.5), label=cor.interval, hjust=1, size=5)
-
-ggsave("Three prime enrichment correlation.pdf")    
 
