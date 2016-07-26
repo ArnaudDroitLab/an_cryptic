@@ -242,7 +242,32 @@ for(metric in c("Antisense.Enrichment", "Three.On.Five.Enrichment")) {
 }
 write.table(stats.df, file=file.path(output.dir, "Statistics.txt"), row.names=FALSE, col.names=TRUE, sep="\t")
 
+plot.enrichment.correlation <- function(enrichment.df, col.suffix) {
+    # Replicates need to be on separate rows, but both enrichment values 
+    # must be on the same row.
+    
+    ck2.1 = enrichment.df[, paste0("CK2", ".", col.suffix)]
+    ck2.2 = enrichment.df[, paste0("CK2", "-2", ".", col.suffix)]
+    spt6.1 = enrichment.df[, paste0("Spt6-SA", ".", col.suffix)]
+    spt6.2 = enrichment.df[, paste0("Spt6-SA", "-2", ".", col.suffix)]
+    
+    plot.df = data.frame(CK2       = c(ck2.1, ck2.2),
+                         Spt6      = c(spt6.1, spt6.2),
+                         Replicate = rep(c(1, 2), each=nrow(enrichment.df)))
+    
+    cor.df = data.frame(Correlation=c(cor(ck2.1, spt6.1), cor(ck2.2, spt6.2)),
+                        Rep = c("1", "2"))
+    
+    ggplot(plot.df, aes(x=CK2, y=Spt6)) +
+        geom_point() +
+        geom_smooth(method="glm") +
+        geom_label(data=cor.df, mapping=aes(label=sprintf("R^2=%.2f", Correlation)), x=max(plot.df$CK2), y=max(plot.df$Spt6), hjust=1, vjust=1) + 
+        facet_grid(~Rep)
+    
+    ggsave(file.path(output.dir, paste0("Correlation between ", col.suffix, ".pdf")))
+}
 
+plot.enrichment.correlation(antisense.enrichment[keep,], "Antisense.Enrichment")
 
 # Do metagene type plot.
 # Build a data.frame describing the matrix files.
