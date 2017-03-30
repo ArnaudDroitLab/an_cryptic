@@ -242,7 +242,7 @@ for(metric in c("Antisense.Enrichment", "Three.On.Five.Enrichment")) {
 }
 write.table(stats.df, file=file.path(output.dir, "Statistics.txt"), row.names=FALSE, col.names=TRUE, sep="\t")
 
-plot.enrichment.correlation <- function(enrichment.df, col.suffix) {
+plot.enrichment.correlation <- function(enrichment.df, col.suffix, label) {
     # Replicates need to be on separate rows, but both enrichment values 
     # must be on the same row.
     
@@ -262,13 +262,32 @@ plot.enrichment.correlation <- function(enrichment.df, col.suffix) {
         geom_point() +
         geom_smooth(method="glm") +
         geom_label(data=cor.df, mapping=aes(label=sprintf("R^2=%.2f", Correlation)), x=max(plot.df$CK2), y=max(plot.df$Spt6), hjust=1, vjust=1) + 
-        facet_grid(~Rep)
+        facet_grid(~Rep) +
+        labs(x=paste("CK2", label), y=paste("Spt6", label))
     
     ggsave(file.path(output.dir, paste0("Correlation between ", col.suffix, ".pdf")))
 }
 
-plot.enrichment.correlation(antisense.enrichment[keep,], "Antisense.Enrichment")
+plot.enrichment.correlation(antisense.enrichment[keep,], "Antisense.Enrichment", "Antisense Enrichment")
+plot.enrichment.correlation(three.on.five.enrichment[keep,], "Three.On.Five.Enrichment", "3' / 5' Enrichment")
 
+no.nas = !apply(is.nan(as.matrix(antisense.enrichment)), 1, any) & 
+         !apply(is.na(as.matrix(antisense.enrichment)), 1, any) & 
+         !apply(is.infinite(as.matrix(antisense.enrichment)), 1, any)
+
+as.df = antisense.enrichment[no.nas,]
+colnames(as.df) <- gsub(".Antisense.Enrichment", "", colnames(as.df))
+
+as.enrich.df = data.frame(CK2=c(as.df$CK2, as.df$"CK2-2"),
+                          Spt6=c(as.df$"Spt6-SA", as.df$"Spt6-SA-2"),
+                          Rep=rep(c(1,2), each=sum(no.nas)))
+         
+ggplot(as.enrich.df, aes(x=CK2, y=Spt6)) +
+    geom_point() +
+    geom_smooth() +
+    facet_grid(~Rep) +
+    labs(x="CK2 Antisense Enrichment", y="Spt6 Antisense Enrichment"
+         
 # Do metagene type plot.
 # Build a data.frame describing the matrix files.
 matrix.path = file.path(base.output.dir, "Metagene")
